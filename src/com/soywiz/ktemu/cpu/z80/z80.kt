@@ -1,4 +1,9 @@
-package com.soywiz.ktemu.z80
+package com.soywiz.ktemu.cpu.z80
+
+import com.soywiz.ktemu.common.exec
+import com.soywiz.ktemu.common.hasAll
+import com.soywiz.ktemu.common.noImpl
+import com.soywiz.ktemu.common.setResetBits
 
 /*
 class Delegate {
@@ -22,33 +27,24 @@ const val FLAG_5 = 0x20
 const val FLAG_Z = 0x40
 const val FLAG_S = 0x80
 
-val noImpl: Nothing get() = throw RuntimeException("Not implemented")
 
-infix fun Int.hasAll(bits: Int): Boolean = (this and bits) == bits
-infix fun Int.setBits(bits: Int): Int = (this or bits)
-infix fun Int.resetBits(bits: Int): Int = (this and bits.inv())
-fun Int.setResetBits(bits: Int, set: Boolean): Int {
-	if (set) {
-		return this setBits bits
-	} else {
-		return this resetBits  bits
-	}
+fun LOW8(v: Int): Int = ((v ushr 0) and 0xFF)
+fun HIGH8(v: Int): Int = ((v ushr 8) and 0xFF)
+fun PACK16(H: Int, L: Int): Int = (H shl 8) or (L shl 0)
+
+interface Z80IO {
+	operator fun get(offset: Int): Int
+	operator fun set(offset: Int, value: Int): Unit
 }
 
-inline fun exec(callback: () -> Unit): Unit {
-	callback()
-}
-fun LOW8(v:Int):Int = ((v ushr 0) and 0xFF)
-fun HIGH8(v:Int):Int = ((v ushr 8) and 0xFF)
-fun PACK16(H:Int, L:Int):Int = (H shl 8) or (L shl 0)
-
-class Z80State {
+class Z80State(val ports: Z80IO) {
 	val m = Z80Mem()
 	val M8 = Z80ByteView(m)
 
 	var tstates: Int = 0 // clock pulses
 
 	var PC: Int = 0; get() = field; set(value) = exec { field = value and 0xFFFF }
+	var SP: Int = 0; get() = field; set(value) = exec { field = value and 0xFFFF }
 	var A: Int = 0; get() = field; set(value) = exec { field = value and 0xFF }
 	var B: Int = 0; get() = field; set(value) = exec { field = value and 0xFF }
 	var C: Int = 0; get() = field; set(value) = exec { field = value and 0xFF }
@@ -68,6 +64,10 @@ class Z80State {
 	var DE: Int get() = PACK16(D, E); set(value) = exec { D = HIGH8(value); E = LOW8(value) }
 	var HL: Int get() = PACK16(H, L); set(value) = exec { H = HIGH8(value); L = LOW8(value) }
 	var HL_: Int get() = PACK16(H_, L_); set(value) = exec { H_ = HIGH8(value); L_ = LOW8(value) }
+
+	var rBC: Int get() = M8[BC]; set(value) = exec { M8[BC] = value }
+	var rDE: Int get() = M8[DE]; set(value) = exec { M8[DE] = value }
+	var rHL: Int get() = M8[HL]; set(value) = exec { M8[HL] = value }
 
 	companion object {
 		/*
@@ -101,16 +101,13 @@ class Z80State {
 	}
 
 
-
-	fun l8(tstates: Int): Int {
-		this.tstates += tstates
+	fun l8(): Int {
 		val value = m.l8(PC)
 		PC++
 		return value
 	}
 
-	fun l16(tstates: Int): Int {
-		this.tstates += tstates
+	fun l16(): Int {
 		val value = m.l16(PC)
 		PC += 2
 		return value
@@ -126,6 +123,11 @@ class Z80State {
 
 	var flag_h: Boolean get() = F hasAll FLAG_H; set(value) {
 		F = F.setResetBits(FLAG_H, value)
+	}
+
+	fun LD(v: Int, tstates: Int): Int {
+		this.tstates += tstates
+		return v
 	}
 
 	// @TODO:
@@ -205,17 +207,41 @@ fun ROT8_L1(v: Int): Int {
 }
 
 fun Z80State.decode() {
-	val op = l8(0)
+	val op = l8()
 	when (op.toInt()) {
 		0x00 -> {
 			// 0x00 NOP
 		}
-		0x01 -> BC = l16(10);
-		0x02 -> WRITE8(BC, A, 7)
-		0x03 -> BC = INC16(BC, 6);
-		0x04 -> B = INC(B, 4)
-		0x05 -> B = DEC(B, 4)
-		0x06 -> B = l8(7) // 0x06 LD B,nn
+		0x01 -> BC = LD(l16(), 10)
+		0x02 -> rBC = LD(A, 7) // LD (BC),A
+		0x06 -> B = LD(l8(), 7) // 0x06 LD B,nn
+
+	// INC 8 bits
+		0x04 -> B = INC(B, 4) // INC B
+		0x0c -> C = INC(C, 4) // INC C
+		0x14 -> D = INC(D, 4) // INC D
+		0x1c -> E = INC(E, 4) // INC E
+		0x24 -> H = INC(H, 4) // INC H
+		0x2c -> L = INC(L, 4) // INC L
+		0x34 -> rHL = INC(rHL, 7) // INC (HL)
+		0x3c -> A = INC(A, 4)
+
+	// DEC 8 bits
+		0x05 -> B = DEC(B, 4) // DEC B
+		0x0d -> C = DEC(C, 4) // DEC C
+		0x15 -> D = DEC(D, 4) // DEC D
+		0x1d -> E = DEC(E, 4) // DEC E
+		0x25 -> H = DEC(H, 4) // DEC H
+		0x2d -> L = DEC(L, 4) // DEC L
+		0x3d -> A = DEC(A, 4) // DEC A
+
+	// INC 16 bits
+		0x03 -> BC = INC16(BC, 6) // INC BC
+		0x13 -> DE = INC16(DE, 6) // INC DE
+		0x23 -> HL = INC16(HL, 6) // INC HL
+		0x33 -> SP = INC16(SP, 6) // INC SP
+
+
 		0x07 -> {
 			// 0x07 RLCA
 			A = ROT8_L1(A)
@@ -230,9 +256,7 @@ fun Z80State.decode() {
 		0x09 -> HL = ADD16(HL, BC, 11)
 		0x0a -> A = READ8(BC, 7)
 		0x0b -> BC = DEC16(BC, 6)
-		0x0c -> C = INC(C, 4)
-		0x0d -> C = DEC(C, 4)
-		0x0e -> C = l8(7) // 0x0e LD C,nn
+		0x0e -> C = LD(l8(), 7) // 0x0e LD C,nn
 		0x0f -> {
 			noImpl
 			//0x0f RRCA
@@ -240,14 +264,20 @@ fun Z80State.decode() {
 			//z80.a = ( z80.a >> 1) | ( (z80.a & 0x01) << 7 );
 			//z80.f |= ( z80.a & ( 0x08 | 0x20 ) );
 		}
-		0xa0 -> A = AND(A, B, 4)
-		0xa1 -> A = AND(A, C, 4)
-		0xa2 -> A = AND(A, D, 4)
-		0xa3 -> A = AND(A, E, 4)
-		0xa4 -> A = AND(A, H, 4)
-		0xa5 -> A = AND(A, L, 4)
-		0xa6 -> A = AND(A, M8[HL], 7)
-		0xa7 -> A = AND(A, A, 4)
+		0x11 -> DE = LD(l16(), 10)
+		0x12 -> rDE = LD(A, 7) // LD (DE),A
+
+		// AND A, op
+		0xa0 -> A = AND(A, B, 4) // AND B
+		0xa1 -> A = AND(A, C, 4) // AND C
+		0xa2 -> A = AND(A, D, 4) // AND D
+		0xa3 -> A = AND(A, E, 4) // AND E
+		0xa4 -> A = AND(A, H, 4) // AND H
+		0xa5 -> A = AND(A, L, 4) // AND L
+		0xa6 -> A = AND(A, rHL, 7) // AND (HL)
+		0xa7 -> A = AND(A, A, 4) // AND A
+		0xe6 -> A = AND(A, l8(), 7) // AND nn
+
 	}
 }
 
@@ -256,42 +286,28 @@ fun Z80State.decode() {
 
 
 0x10 DJNZ offset
-0x11 LD DE,nnnn
-0x12 LD (DE),A
-0x13 INC DE
-0x14 INC D
-0x15 DEC D
 0x16 LD D,nn
 0x17 RLA
 0x18 JR offset
 0x19 ADD HL,DE
 0x1a LD A,(DE)
 0x1b DEC DE
-0x1c INC E
-0x1d DEC E
 0x1e LD E,nn
 0x1f RRA
 0x20 JR NZ,offset
 0x21 LD HL,nnnn
 0x22 LD (nnnn),HL
-0x23 INC HL
-0x24 INC H
-0x25 DEC H
 0x26 LD H,nn
 0x27 DAA
 0x28 JR Z,offset
 0x29 ADD HL,HL
 0x2a LD HL,(nnnn)
 0x2b DEC HL
-0x2c INC L
-0x2d DEC L
 0x2e LD L,nn
 0x2f CPL
 0x30 JR NC,offset
 0x31 LD SP,nnnn
 0x32 LD (nnnn),A
-0x33 INC SP
-0x34 INC (HL)
 0x35 DEC (HL)
 0x36 LD (HL),nn
 0x37 SCF
@@ -299,8 +315,6 @@ fun Z80State.decode() {
 0x39 ADD HL,SP
 0x3a LD A,(nnnn)
 0x3b DEC SP
-0x3c INC A
-0x3d DEC A
 0x3e LD A,nn
 0x3f CCF
 0x40 LD B,B
@@ -461,7 +475,6 @@ fun Z80State.decode() {
 0xe3 EX (SP),HL
 0xe4 CALL PO,nnnn
 0xe5 PUSH HL
-0xe6 AND nn
 0xe7 RST 20
 0xe8 RET PE
 0xe9 JP HL
