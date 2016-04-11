@@ -1,14 +1,16 @@
-package com.soywiz.ktemu.system
+package com.soywiz.ktemu.system.sms
 
 import com.soywiz.ktemu.cpu.z80.Z80IO
-import com.soywiz.ktemu.gpu.sms.SmsVDP
-import com.soywiz.ktemu.input.sms.SmsInput
-import com.soywiz.ktemu.spu.sms.SmsSPU
+import com.soywiz.ktemu.system.sms.SmsVDP
+import com.soywiz.ktemu.system.sms.SmsInput
+import com.soywiz.ktemu.system.sms.SmsSPU
 
 class SmsPorts(private val vdp: SmsVDP, private val input: SmsInput, private val spu: SmsSPU) : Z80IO {
-	var inputMode: Int = 0
+	var inputMode: Int = 7
 
 	override fun get(addr: Int): Int {
+		//println(":: PORT: %04X".format(addr))
+
 		return when (addr) {
 			0x7e -> vdp.getLine();
 			0x7f -> vdp.getX();
@@ -27,6 +29,7 @@ class SmsPorts(private val vdp: SmsVDP, private val input: SmsInput, private val
 	}
 
 	override fun set(addr: Int, value: Int) {
+		//println(":: PORT: %04X <- %02X".format(addr, value))
 		when (addr) {
 			0x3f -> {
 				var natbit = (( value ushr 5) and 1);
